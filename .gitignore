@@ -42,3 +42,5 @@ dist/
 *chrome_profile_unitedsco*
 *chrome_profile_deltains*
 
+# selenium downloads (generated PDFs)
+apps/**/seleniumDownloads/

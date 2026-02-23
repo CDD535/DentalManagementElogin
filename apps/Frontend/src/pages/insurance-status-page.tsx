@@ -578,7 +578,7 @@ export default function InsuranceStatusPage() {
             {/* TEMP PROVIDER BUTTONS */}
             <div className="space-y-4 mt-6">
               <h3 className="text-sm font-medium text-muted-foreground">
-                Other provider checks
+                Other Insurances
               </h3>
 
               {/* Row 1 */}
@@ -619,7 +619,7 @@ export default function InsuranceStatusPage() {
                   disabled={isFormIncomplete}
                 >
                   <CheckCircle className="h-4 w-4 mr-2" />
-                  CCA
+                  BCBS
                 </Button>
               </div>
 
@@ -661,11 +661,39 @@ export default function InsuranceStatusPage() {
                   disabled={isFormIncomplete}
                 >
                   <CheckCircle className="h-4 w-4 mr-2" />
-                  United AAPR
+                  CCA
                 </Button>
               </div>
 
               {/* Row 3 */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <Button
+                  className="w-full"
+                  variant="outline"
+                  disabled={isFormIncomplete}
+                >
+                  <CheckCircle className="h-4 w-4 mr-2" />
+                  United AAPR
+                </Button>
+                <Button
+                  className="w-full"
+                  variant="outline"
+                  disabled={isFormIncomplete}
+                >
+                  <CheckCircle className="h-4 w-4 mr-2" />
+                  Metlife
+                </Button>
+                <Button
+                  className="w-full"
+                  variant="outline"
+                  disabled={isFormIncomplete}
+                >
+                  <CheckCircle className="h-4 w-4 mr-2" />
+                  Cigna
+                </Button>
+              </div>
+
+              {/* Row 4 */}
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <Button
                   className="w-full"
@@ -683,7 +711,28 @@ export default function InsuranceStatusPage() {
                   <CheckCircle className="h-4 w-4 mr-2" />
                   Altus
                 </Button>
-                <div /> {/* filler cell to keep grid shape */}
+                <Button
+                  className="w-full"
+                  variant="outline"
+                  disabled={isFormIncomplete}
+                >
+                  <CheckCircle className="h-4 w-4 mr-2" />
+                  Delta WA
+                </Button>
+              </div>
+
+              {/* Row 5 */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <Button
+                  className="w-full"
+                  variant="outline"
+                  disabled={isFormIncomplete}
+                >
+                  <CheckCircle className="h-4 w-4 mr-2" />
+                  Delta IL
+                </Button>
+                <div />
+                <div />
               </div>
             </div>
           </CardContent>

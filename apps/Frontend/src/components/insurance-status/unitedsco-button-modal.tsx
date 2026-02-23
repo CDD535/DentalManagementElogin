@@ -551,7 +551,7 @@ export function UnitedSCOEligibilityButton({
     <>
       <Button
         className="w-full"
-        variant="outline"
+        
         disabled={isUnitedSCOFormIncomplete || isStarting}
         onClick={startUnitedSCOEligibility}
       >

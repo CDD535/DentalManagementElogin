@@ -545,7 +545,7 @@ export function DentaQuestEligibilityButton({
     <>
       <Button
         className="w-full"
-        variant="outline"
+        
         disabled={isDentaQuestFormIncomplete || isStarting}
         onClick={startDentaQuestEligibility}
       >

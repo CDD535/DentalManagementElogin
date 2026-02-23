@@ -523,7 +523,7 @@ export function DeltaInsEligibilityButton({
     <>
       <Button
         className="w-full"
-        variant="outline"
+        
         disabled={isDeltaInsFormIncomplete || isStarting}
         onClick={startDeltaInsEligibility}
       >
