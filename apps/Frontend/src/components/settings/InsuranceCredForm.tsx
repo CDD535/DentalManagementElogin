@@ -21,6 +21,7 @@ const SITE_KEY_OPTIONS = [
   { value: "DELTAINS", label: "Delta Dental Ins" },
   { value: "DENTAQUEST", label: "Tufts SCO / DentaQuest" },
   { value: "UNITEDSCO", label: "United SCO" },
+  { value: "CCA", label: "CCA" },
 ];
 
 export function CredentialForm({ onClose, userId, defaultValues }: CredentialFormProps) {

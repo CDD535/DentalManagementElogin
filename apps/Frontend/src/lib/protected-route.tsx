@@ -4,28 +4,32 @@ import { useAuth } from "@/hooks/use-auth";
 import { Suspense } from "react";
 import { Redirect, Route } from "wouter";
 
-type ComponentLike = React.ComponentType; // works for both lazy() and regular components
+type ComponentLike = React.ComponentType;
 
 export function ProtectedRoute({
   path,
   component: Component,
+  adminOnly,
 }: {
   path: string;
   component: ComponentLike;
+  adminOnly?: boolean;
 }) {
   const { user, isLoading } = useAuth();
 
   return (
     <Route path={path}>
-      {/* While auth is resolving: keep layout visible and show a small spinner in the content area */}
       {isLoading ? (
         <AppLayout>
           <LoadingScreen />
         </AppLayout>
       ) : !user ? (
         <Redirect to="/auth" />
+      ) : adminOnly &&
+        user.role?.toUpperCase() !== "ADMIN" &&
+        user.username?.toLowerCase() !== "admin" ? (
+        <Redirect to="/dashboard" />
       ) : (
-        // Authenticated: render page inside layout. Lazy pages load with an in-layout spinner.
         <AppLayout>
           <Suspense fallback={<LoadingScreen />}>
             <Component />

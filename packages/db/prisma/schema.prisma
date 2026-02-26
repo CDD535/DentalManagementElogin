@@ -18,10 +18,16 @@ datasource db {
   provider = "postgresql"
 }
 
+enum UserRole {
+  ADMIN
+  USER
+}
+
 model User {
   id                   Int                   @id @default(autoincrement())
   username             String                @unique
   password             String
+  role                 UserRole               @default(USER)
   patients             Patient[]
   appointments         Appointment[]
   staff                Staff[]

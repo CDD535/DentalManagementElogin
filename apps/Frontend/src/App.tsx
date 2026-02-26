@@ -41,7 +41,7 @@ function Router() {
         component={() => <AppointmentsPage />}
       />
       <ProtectedRoute path="/patients" component={() => <PatientsPage />} />
-      <ProtectedRoute path="/settings" component={() => <SettingsPage />} />
+      <ProtectedRoute path="/settings" component={() => <SettingsPage />} adminOnly />
       <ProtectedRoute path="/claims" component={() => <ClaimsPage />} />
       <ProtectedRoute
         path="/insurance-status"

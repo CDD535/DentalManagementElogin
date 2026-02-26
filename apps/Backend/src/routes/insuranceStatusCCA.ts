@@ -1,10 +1,9 @@
 import { Router, Request, Response } from "express";
 import { storage } from "../storage";
 import {
-  forwardToSeleniumDentaQuestEligibilityAgent,
-  forwardOtpToSeleniumDentaQuestAgent,
-  getSeleniumDentaQuestSessionStatus,
-} from "../services/seleniumDentaQuestInsuranceEligibilityClient";
+  forwardToSeleniumCCAEligibilityAgent,
+  getSeleniumCCASessionStatus,
+} from "../services/seleniumCCAInsuranceEligibilityClient";
 import fs from "fs/promises";
 import fsSync from "fs";
 import path from "path";
@@ -18,16 +17,14 @@ import { io } from "../socket";
 
 const router = Router();
 
-/** Job context stored in memory by sessionId */
-interface DentaQuestJobContext {
+interface CCAJobContext {
   userId: number;
-  insuranceEligibilityData: any; // parsed, enriched (includes username/password)
+  insuranceEligibilityData: any;
   socketId?: string;
 }
 
-const dentaquestJobs: Record<string, DentaQuestJobContext> = {};
+const ccaJobs: Record<string, CCAJobContext> = {};
 
-/** Utility: naive name splitter */
 function splitName(fullName?: string | null) {
   if (!fullName) return { firstName: "", lastName: "" };
   const parts = fullName.trim().split(/\s+/).filter(Boolean);
@@ -46,17 +43,15 @@ async function imageToPdfBuffer(imagePath: string): Promise<Buffer> {
       doc.on("end", () => resolve(Buffer.concat(chunks)));
       doc.on("error", (err: any) => reject(err));
 
-      const A4_WIDTH = 595.28; // points
-      const A4_HEIGHT = 841.89; // points
+      const A4_WIDTH = 595.28;
+      const A4_HEIGHT = 841.89;
 
       doc.addPage({ size: [A4_WIDTH, A4_HEIGHT] });
-
       doc.image(imagePath, 0, 0, {
         fit: [A4_WIDTH, A4_HEIGHT],
         align: "center",
         valign: "center",
       });
-
       doc.end();
     } catch (err) {
       reject(err);
@@ -64,17 +59,16 @@ async function imageToPdfBuffer(imagePath: string): Promise<Buffer> {
   });
 }
 
-/**
- * Ensure patient exists for given insuranceId.
- */
 async function createOrUpdatePatientByInsuranceId(options: {
   insuranceId: string;
   firstName?: string | null;
   lastName?: string | null;
   dob?: string | Date | null;
   userId: number;
+  eligibilityStatus?: string;
 }) {
-  const { insuranceId, firstName, lastName, dob, userId } = options;
+  const { insuranceId, firstName, lastName, dob, userId, eligibilityStatus } =
+    options;
   if (!insuranceId) throw new Error("Missing insuranceId");
 
   const incomingFirst = (firstName || "").trim();
@@ -101,15 +95,19 @@ async function createOrUpdatePatientByInsuranceId(options: {
     }
     return;
   } else {
+    console.log(
+      `[cca-eligibility] Creating new patient: ${incomingFirst} ${incomingLast} with status: ${eligibilityStatus || "UNKNOWN"}`
+    );
     const createPayload: any = {
       firstName: incomingFirst,
       lastName: incomingLast,
       dateOfBirth: dob,
-      gender: "",
+      gender: "Unknown",
       phone: "",
       userId,
       insuranceId,
-      insuranceProvider: "Tufts / DentaQuest",
+      insuranceProvider: "CCA",
+      status: eligibilityStatus || "UNKNOWN",
     };
     let patientData: InsertPatient;
     try {
@@ -119,54 +117,71 @@ async function createOrUpdatePatientByInsuranceId(options: {
       delete (safePayload as any).dateOfBirth;
       patientData = insertPatientSchema.parse(safePayload);
     }
-    await storage.createPatient(patientData);
+    const newPatient = await storage.createPatient(patientData);
+    console.log(
+      `[cca-eligibility] Created new patient: ${newPatient.id} with status: ${eligibilityStatus || "UNKNOWN"}`
+    );
   }
 }
 
-/**
- * When Selenium finishes for a given sessionId, run your patient + PDF pipeline,
- * and return the final API response shape.
- */
-async function handleDentaQuestCompletedJob(
+async function handleCCACompletedJob(
   sessionId: string,
-  job: DentaQuestJobContext,
+  job: CCAJobContext,
   seleniumResult: any
 ) {
   let createdPdfFileId: number | null = null;
+  let generatedPdfPath: string | null = null;
   const outputResult: any = {};
 
-  // We'll wrap the processing in try/catch/finally so cleanup always runs
   try {
     const insuranceEligibilityData = job.insuranceEligibilityData;
-    
-    // 1) Get Member ID - prefer the one extracted from the page by Selenium,
-    // since we now allow searching by name only
+
     let insuranceId = String(seleniumResult?.memberId ?? "").trim();
     if (!insuranceId) {
-      // Fallback to the one provided in the request
       insuranceId = String(insuranceEligibilityData.memberId ?? "").trim();
     }
-    
-    console.log(`[dentaquest-eligibility] Insurance ID: ${insuranceId || "(none)"}`);
 
-    // 2) Create or update patient (with name from selenium result if available)
+    if (!insuranceId) {
+      console.log(
+        "[cca-eligibility] No Member ID found - will use name for patient lookup"
+      );
+    } else {
+      console.log(`[cca-eligibility] Using Member ID: ${insuranceId}`);
+    }
+
     const patientNameFromResult =
       typeof seleniumResult?.patientName === "string"
         ? seleniumResult.patientName.trim()
         : null;
 
-    // Get name from request data as fallback
     let firstName = insuranceEligibilityData.firstName || "";
     let lastName = insuranceEligibilityData.lastName || "";
-    
-    // Override with name from Selenium result if available
+
     if (patientNameFromResult) {
       const parsedName = splitName(patientNameFromResult);
       firstName = parsedName.firstName || firstName;
       lastName = parsedName.lastName || lastName;
     }
 
-    // Create or update patient if we have an insurance ID
+    const rawEligibility = String(
+      seleniumResult?.eligibility ?? ""
+    ).toLowerCase();
+    const eligibilityStatus =
+      rawEligibility.includes("active") || rawEligibility.includes("eligible")
+        ? "ACTIVE"
+        : "INACTIVE";
+    console.log(`[cca-eligibility] Eligibility status: ${eligibilityStatus}`);
+
+    // Extract extra patient data from selenium result
+    const extractedAddress = String(seleniumResult?.address ?? "").trim();
+    const extractedCity = String(seleniumResult?.city ?? "").trim();
+    const extractedZip = String(seleniumResult?.zipCode ?? "").trim();
+    const extractedInsurer = String(seleniumResult?.insurerName ?? "").trim() || "CCA";
+
+    if (extractedAddress || extractedCity || extractedZip) {
+      console.log(`[cca-eligibility] Extra data: address=${extractedAddress}, city=${extractedCity}, zip=${extractedZip}, insurer=${extractedInsurer}`);
+    }
+
     if (insuranceId) {
       await createOrUpdatePatientByInsuranceId({
         insuranceId,
@@ -174,80 +189,80 @@ async function handleDentaQuestCompletedJob(
         lastName,
         dob: insuranceEligibilityData.dateOfBirth,
         userId: job.userId,
+        eligibilityStatus,
       });
-    } else {
-      console.log("[dentaquest-eligibility] No Member ID available - will try to find patient by name/DOB");
     }
 
-    // 3) Update patient status + PDF upload
-    // First try to find by insurance ID, then by name + DOB
-    let patient = insuranceId 
+    let patient = insuranceId
       ? await storage.getPatientByInsuranceId(insuranceId)
       : null;
-    
-    // If not found by ID and we have name + DOB, try to find by those
-    if (!patient && firstName && lastName) {
-      console.log(`[dentaquest-eligibility] Looking up patient by name: ${firstName} ${lastName}`);
-      const patients = await storage.getPatientsByUserId(job.userId);
-      patient = patients.find(p => 
-        p.firstName?.toLowerCase() === firstName.toLowerCase() &&
-        p.lastName?.toLowerCase() === lastName.toLowerCase()
-      ) || null;
-      
-      // If found and we now have the insurance ID, update the patient record
-      if (patient && insuranceId) {
-        await storage.updatePatient(patient.id, { insuranceId });
-        console.log(`[dentaquest-eligibility] Updated patient ${patient.id} with insuranceId: ${insuranceId}`);
-      }
-    }
-    
-    // Determine eligibility status from Selenium result
-    const eligibilityStatus = seleniumResult.eligibility === "active" ? "ACTIVE" : "INACTIVE";
-    console.log(`[dentaquest-eligibility] Eligibility status from DentaQuest: ${eligibilityStatus}`);
-    
-    // If still no patient found, CREATE a new one with the data we have
+
     if (!patient?.id && firstName && lastName) {
-      console.log(`[dentaquest-eligibility] Creating new patient: ${firstName} ${lastName} with status: ${eligibilityStatus}`);
-      
-      const createPayload: any = {
-        firstName,
-        lastName,
-        dateOfBirth: insuranceEligibilityData.dateOfBirth || null,
-        gender: "",
-        phone: "",
-        userId: job.userId,
-        insuranceId: insuranceId || null,
-        insuranceProvider: "Tufts / DentaQuest",
-        status: eligibilityStatus, // Set status from eligibility check
-      };
-      
-      try {
-        const patientData = insertPatientSchema.parse(createPayload);
-        const newPatient = await storage.createPatient(patientData);
-        if (newPatient) {
-          patient = newPatient;
-          console.log(`[dentaquest-eligibility] Created new patient with ID: ${patient.id}, status: ${eligibilityStatus}`);
-        }
-      } catch (err: any) {
-        // Try without dateOfBirth if it fails
-        try {
-          const safePayload = { ...createPayload };
-          delete safePayload.dateOfBirth;
-          const patientData = insertPatientSchema.parse(safePayload);
-          const newPatient = await storage.createPatient(patientData);
-          if (newPatient) {
-            patient = newPatient;
-            console.log(`[dentaquest-eligibility] Created new patient (no DOB) with ID: ${patient.id}, status: ${eligibilityStatus}`);
-          }
-        } catch (err2: any) {
-          console.error(`[dentaquest-eligibility] Failed to create patient: ${err2?.message}`);
-        }
+      const patients = await storage.getAllPatients(job.userId);
+      patient =
+        patients.find(
+          (p) =>
+            p.firstName?.toLowerCase() === firstName.toLowerCase() &&
+            p.lastName?.toLowerCase() === lastName.toLowerCase()
+        ) ?? null;
+      if (patient) {
+        console.log(
+          `[cca-eligibility] Found patient by name: ${patient.id}`
+        );
       }
     }
-    
+
+    if (!patient && firstName && lastName) {
+      console.log(
+        `[cca-eligibility] Creating new patient: ${firstName} ${lastName}`
+      );
+      try {
+        let parsedDob: Date | undefined = undefined;
+        if (insuranceEligibilityData.dateOfBirth) {
+          try {
+            parsedDob = new Date(insuranceEligibilityData.dateOfBirth);
+            if (isNaN(parsedDob.getTime())) parsedDob = undefined;
+          } catch {
+            parsedDob = undefined;
+          }
+        }
+
+        const newPatientData: InsertPatient = {
+          firstName,
+          lastName,
+          dateOfBirth: parsedDob || new Date(),
+          insuranceId: insuranceId || undefined,
+          insuranceProvider: extractedInsurer,
+          gender: "Unknown",
+          phone: "",
+          userId: job.userId,
+          status: eligibilityStatus,
+          address: extractedAddress || undefined,
+          city: extractedCity || undefined,
+          zipCode: extractedZip || undefined,
+        };
+
+        const validation = insertPatientSchema.safeParse(newPatientData);
+        if (validation.success) {
+          patient = await storage.createPatient(validation.data);
+          console.log(
+            `[cca-eligibility] Created new patient: ${patient.id}`
+          );
+        } else {
+          console.log(
+            `[cca-eligibility] Patient validation failed: ${validation.error.message}`
+          );
+        }
+      } catch (createErr: any) {
+        console.log(
+          `[cca-eligibility] Failed to create patient: ${createErr.message}`
+        );
+      }
+    }
+
     if (!patient?.id) {
       outputResult.patientUpdateStatus =
-        "Patient not found and could not be created";
+        "Patient not found and could not be created; no update performed";
       return {
         patientUpdateStatus: outputResult.patientUpdateStatus,
         pdfUploadStatus: "none",
@@ -255,61 +270,93 @@ async function handleDentaQuestCompletedJob(
       };
     }
 
-    // Update patient status from DentaQuest eligibility result
-    await storage.updatePatient(patient.id, { status: eligibilityStatus, insuranceProvider: "Tufts / DentaQuest" });
-    outputResult.patientUpdateStatus = `Patient ${patient.id} status set to ${eligibilityStatus}, insuranceProvider=Tufts / DentaQuest (DentaQuest eligibility: ${seleniumResult.eligibility})`;
-    console.log(`[dentaquest-eligibility] ${outputResult.patientUpdateStatus}`);
+    const updatePayload: Record<string, any> = {
+      status: eligibilityStatus,
+      insuranceProvider: extractedInsurer,
+    };
+    if (firstName && (!patient.firstName || patient.firstName.trim() === "")) {
+      updatePayload.firstName = firstName;
+    }
+    if (lastName && (!patient.lastName || patient.lastName.trim() === "")) {
+      updatePayload.lastName = lastName;
+    }
+    if (extractedAddress && (!patient.address || patient.address.trim() === "")) {
+      updatePayload.address = extractedAddress;
+    }
+    if (extractedCity && (!patient.city || patient.city.trim() === "")) {
+      updatePayload.city = extractedCity;
+    }
+    if (extractedZip && (!patient.zipCode || patient.zipCode.trim() === "")) {
+      updatePayload.zipCode = extractedZip;
+    }
 
-    // Handle PDF or convert screenshot -> pdf if available
+    await storage.updatePatient(patient.id, updatePayload);
+    outputResult.patientUpdateStatus = `Patient ${patient.id} updated: status=${eligibilityStatus}, insuranceProvider=${extractedInsurer}, name=${firstName} ${lastName}, address=${extractedAddress}, city=${extractedCity}, zip=${extractedZip}`;
+    console.log(`[cca-eligibility] ${outputResult.patientUpdateStatus}`);
+
+    // Handle PDF
     let pdfBuffer: Buffer | null = null;
-    let generatedPdfPath: string | null = null;
 
     if (
-      seleniumResult &&
-      seleniumResult.ss_path &&
+      seleniumResult?.pdfBase64 &&
+      typeof seleniumResult.pdfBase64 === "string" &&
+      seleniumResult.pdfBase64.length > 100
+    ) {
+      try {
+        pdfBuffer = Buffer.from(seleniumResult.pdfBase64, "base64");
+        const pdfFileName = `cca_eligibility_${insuranceId || "unknown"}_${Date.now()}.pdf`;
+        const downloadDir = path.join(process.cwd(), "seleniumDownloads");
+        if (!fsSync.existsSync(downloadDir)) {
+          fsSync.mkdirSync(downloadDir, { recursive: true });
+        }
+        generatedPdfPath = path.join(downloadDir, pdfFileName);
+        await fs.writeFile(generatedPdfPath, pdfBuffer);
+        console.log(
+          `[cca-eligibility] PDF saved from base64: ${generatedPdfPath}`
+        );
+      } catch (pdfErr: any) {
+        console.error(
+          `[cca-eligibility] Failed to save base64 PDF: ${pdfErr.message}`
+        );
+        pdfBuffer = null;
+      }
+    }
+
+    if (
+      !pdfBuffer &&
+      seleniumResult?.ss_path &&
       typeof seleniumResult.ss_path === "string"
     ) {
       try {
         if (!fsSync.existsSync(seleniumResult.ss_path)) {
-          throw new Error(
-            `File not found: ${seleniumResult.ss_path}`
-          );
+          throw new Error(`File not found: ${seleniumResult.ss_path}`);
         }
 
-        // Check if the file is already a PDF (from Page.printToPDF)
         if (seleniumResult.ss_path.endsWith(".pdf")) {
-          // Read PDF directly
           pdfBuffer = await fs.readFile(seleniumResult.ss_path);
           generatedPdfPath = seleniumResult.ss_path;
           seleniumResult.pdf_path = generatedPdfPath;
-          console.log(`[dentaquest-eligibility] Using PDF directly from Selenium: ${generatedPdfPath}`);
         } else if (
           seleniumResult.ss_path.endsWith(".png") ||
           seleniumResult.ss_path.endsWith(".jpg") ||
           seleniumResult.ss_path.endsWith(".jpeg")
         ) {
-          // Convert image to PDF
           pdfBuffer = await imageToPdfBuffer(seleniumResult.ss_path);
-
-          const pdfFileName = `dentaquest_eligibility_${insuranceEligibilityData.memberId}_${Date.now()}.pdf`;
+          const pdfFileName = `cca_eligibility_${insuranceId || "unknown"}_${Date.now()}.pdf`;
           generatedPdfPath = path.join(
             path.dirname(seleniumResult.ss_path),
             pdfFileName
           );
           await fs.writeFile(generatedPdfPath, pdfBuffer);
           seleniumResult.pdf_path = generatedPdfPath;
-          console.log(`[dentaquest-eligibility] Converted screenshot to PDF: ${generatedPdfPath}`);
-        } else {
-          outputResult.pdfUploadStatus =
-            `Unsupported file format: ${seleniumResult.ss_path}`;
         }
       } catch (err: any) {
-        console.error("Failed to process PDF/screenshot:", err);
+        console.error(
+          "[cca-eligibility] Failed to process PDF/screenshot:",
+          err
+        );
         outputResult.pdfUploadStatus = `Failed to process file: ${String(err)}`;
       }
-    } else {
-      outputResult.pdfUploadStatus =
-        "No valid file path (ss_path) provided by Selenium; nothing to upload.";
     }
 
     if (pdfBuffer && generatedPdfPath) {
@@ -340,47 +387,46 @@ async function handleDentaQuestCompletedJob(
         createdPdfFileId = Number(created.id);
       }
       outputResult.pdfUploadStatus = `PDF saved to group: ${group.title}`;
-    } else {
-      outputResult.pdfUploadStatus =
-        "No valid PDF path provided by Selenium, Couldn't upload pdf to server.";
+    } else if (!outputResult.pdfUploadStatus) {
+      outputResult.pdfUploadStatus = "No PDF available from Selenium";
     }
+
+    const pdfFilename = generatedPdfPath
+      ? path.basename(generatedPdfPath)
+      : null;
 
     return {
       patientUpdateStatus: outputResult.patientUpdateStatus,
       pdfUploadStatus: outputResult.pdfUploadStatus,
       pdfFileId: createdPdfFileId,
+      pdfFilename,
     };
   } catch (err: any) {
+    const pdfFilename = generatedPdfPath
+      ? path.basename(generatedPdfPath)
+      : null;
     return {
       patientUpdateStatus: outputResult.patientUpdateStatus,
       pdfUploadStatus:
         outputResult.pdfUploadStatus ??
-        `Failed to process DentaQuest job: ${err?.message ?? String(err)}`,
+        `Failed to process CCA job: ${err?.message ?? String(err)}`,
       pdfFileId: createdPdfFileId,
+      pdfFilename,
       error: err?.message ?? String(err),
     };
   } finally {
-    // ALWAYS attempt cleanup of temp files
     try {
       if (seleniumResult && seleniumResult.pdf_path) {
         await emptyFolderContainingFile(seleniumResult.pdf_path);
       } else if (seleniumResult && seleniumResult.ss_path) {
         await emptyFolderContainingFile(seleniumResult.ss_path);
-      } else {
-        console.log(
-          `[dentaquest-eligibility] no pdf_path or ss_path available to cleanup`
-        );
       }
     } catch (cleanupErr) {
-      console.error(
-        `[dentaquest-eligibility cleanup failed for ${seleniumResult?.pdf_path ?? seleniumResult?.ss_path}]`,
-        cleanupErr
-      );
+      console.error(`[cca-eligibility cleanup failed]`, cleanupErr);
     }
   }
 }
 
-// --- top of file, alongside dentaquestJobs ---
 let currentFinalSessionId: string | null = null;
 let currentFinalResult: any = null;
 
@@ -412,62 +458,50 @@ function emitSafe(socketId: string | undefined, event: string, payload: any) {
   }
 }
 
-/**
- * Polls Python agent for session status and emits socket events:
- *  - 'selenium:otp_required' when waiting_for_otp
- *  - 'selenium:session_update' when completed/error
- *  - absolute timeout + transient error handling.
- *  - pollTimeoutMs default = 2 minutes (adjust where invoked)
- */
 async function pollAgentSessionAndProcess(
   sessionId: string,
   socketId?: string,
-  pollTimeoutMs = 2 * 60 * 1000
+  pollTimeoutMs = 4 * 60 * 1000
 ) {
   const maxAttempts = 300;
   const baseDelayMs = 1000;
   const maxTransientErrors = 12;
+  const noProgressLimit = 200;
 
-  // NEW: give up if same non-terminal status repeats this many times
-  const noProgressLimit = 100;
-
-  const job = dentaquestJobs[sessionId];
+  const job = ccaJobs[sessionId];
   let transientErrorCount = 0;
   let consecutiveNoProgress = 0;
   let lastStatus: string | null = null;
   const deadline = Date.now() + pollTimeoutMs;
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    // absolute deadline check
     if (Date.now() > deadline) {
       emitSafe(socketId, "selenium:session_update", {
         session_id: sessionId,
         status: "error",
         message: `Polling timeout reached (${Math.round(pollTimeoutMs / 1000)}s).`,
       });
-      delete dentaquestJobs[sessionId];
+      delete ccaJobs[sessionId];
       return;
     }
 
     log(
-      "poller",
+      "poller-cca",
       `attempt=${attempt} session=${sessionId} transientErrCount=${transientErrorCount}`
     );
 
     try {
-      const st = await getSeleniumDentaQuestSessionStatus(sessionId);
+      const st = await getSeleniumCCASessionStatus(sessionId);
       const status = st?.status ?? null;
-      log("poller", "got status", {
+      log("poller-cca", "got status", {
         sessionId,
         status,
         message: st?.message,
         resultKeys: st?.result ? Object.keys(st.result) : null,
       });
 
-      // reset transient errors on success
       transientErrorCount = 0;
 
-      // if status unchanged and non-terminal, increment no-progress counter
       const isTerminalLike =
         status === "completed" || status === "error" || status === "not_found";
       if (status === lastStatus && !isTerminalLike) {
@@ -477,7 +511,6 @@ async function pollAgentSessionAndProcess(
       }
       lastStatus = status;
 
-      // if no progress for too many consecutive polls -> abort
       if (consecutiveNoProgress >= noProgressLimit) {
         emitSafe(socketId, "selenium:session_update", {
           session_id: sessionId,
@@ -489,11 +522,10 @@ async function pollAgentSessionAndProcess(
           status: "error",
           message: "No progress from selenium agent",
         });
-        delete dentaquestJobs[sessionId];
+        delete ccaJobs[sessionId];
         return;
       }
 
-      // always emit debug to client if socket exists
       emitSafe(socketId, "selenium:debug", {
         session_id: sessionId,
         attempt,
@@ -501,25 +533,12 @@ async function pollAgentSessionAndProcess(
         serverTime: new Date().toISOString(),
       });
 
-      // If agent is waiting for OTP, inform client but keep polling (do not return)
-      if (status === "waiting_for_otp") {
-        emitSafe(socketId, "selenium:otp_required", {
-          session_id: sessionId,
-          message: "OTP required. Please enter the OTP.",
-        });
-        // do not return — keep polling (allows same poller to pick up completion)
-        await new Promise((r) => setTimeout(r, baseDelayMs));
-        continue;
-      }
-
-      // Completed path
       if (status === "completed") {
-        log("poller", "agent completed; processing result", {
+        log("poller-cca", "agent completed; processing result", {
           sessionId,
           resultKeys: st.result ? Object.keys(st.result) : null,
         });
 
-        // Persist raw result so frontend can fetch if socket disconnects
         currentFinalSessionId = sessionId;
         currentFinalResult = {
           rawSelenium: st.result,
@@ -530,7 +549,7 @@ async function pollAgentSessionAndProcess(
         let finalResult: any = null;
         if (job && st.result) {
           try {
-            finalResult = await handleDentaQuestCompletedJob(
+            finalResult = await handleCCACompletedJob(
               sessionId,
               job,
               st.result
@@ -543,7 +562,7 @@ async function pollAgentSessionAndProcess(
               detail: err?.message ?? String(err),
             };
             currentFinalResult.processedAt = Date.now();
-            log("poller", "handleDentaQuestCompletedJob failed", {
+            log("poller-cca", "handleCCACompletedJob failed", {
               sessionId,
               err: err?.message ?? err,
             });
@@ -555,7 +574,6 @@ async function pollAgentSessionAndProcess(
           currentFinalResult.processedAt = Date.now();
         }
 
-        // Emit final update (if socket present)
         emitSafe(socketId, "selenium:session_update", {
           session_id: sessionId,
           status: "completed",
@@ -563,12 +581,10 @@ async function pollAgentSessionAndProcess(
           final: currentFinalResult.final,
         });
 
-        // cleanup job context
-        delete dentaquestJobs[sessionId];
+        delete ccaJobs[sessionId];
         return;
       }
 
-      // Terminal error / not_found
       if (status === "error" || status === "not_found") {
         const emitPayload = {
           session_id: sessionId,
@@ -577,7 +593,7 @@ async function pollAgentSessionAndProcess(
         };
         emitSafe(socketId, "selenium:session_update", emitPayload);
         emitSafe(socketId, "selenium:session_error", emitPayload);
-        delete dentaquestJobs[sessionId];
+        delete ccaJobs[sessionId];
         return;
       }
     } catch (err: any) {
@@ -587,16 +603,14 @@ async function pollAgentSessionAndProcess(
       const errMsg = err?.message ?? String(err);
       const errData = err?.response?.data ?? null;
 
-      // If agent explicitly returned 404 -> terminal (session gone)
       if (
         axiosStatus === 404 ||
         (typeof errMsg === "string" && errMsg.includes("not_found"))
       ) {
         console.warn(
-          `${new Date().toISOString()} [poller] terminal 404/not_found for ${sessionId}: data=${JSON.stringify(errData)}`
+          `${new Date().toISOString()} [poller-cca] terminal 404/not_found for ${sessionId}`
         );
 
-        // Emit not_found to client
         const emitPayload = {
           session_id: sessionId,
           status: "not_found",
@@ -606,12 +620,10 @@ async function pollAgentSessionAndProcess(
         emitSafe(socketId, "selenium:session_update", emitPayload);
         emitSafe(socketId, "selenium:session_error", emitPayload);
 
-        // Remove job context and stop polling
-        delete dentaquestJobs[sessionId];
+        delete ccaJobs[sessionId];
         return;
       }
 
-      // Detailed transient error logging
       transientErrorCount++;
       if (transientErrorCount > maxTransientErrors) {
         const emitPayload = {
@@ -622,7 +634,7 @@ async function pollAgentSessionAndProcess(
         };
         emitSafe(socketId, "selenium:session_update", emitPayload);
         emitSafe(socketId, "selenium:session_error", emitPayload);
-        delete dentaquestJobs[sessionId];
+        delete ccaJobs[sessionId];
         return;
       }
 
@@ -631,38 +643,26 @@ async function pollAgentSessionAndProcess(
         baseDelayMs * Math.pow(2, transientErrorCount - 1)
       );
       console.warn(
-        `${new Date().toISOString()} [poller] transient error (#${transientErrorCount}) for ${sessionId}: code=${errCode} status=${axiosStatus} msg=${errMsg} data=${JSON.stringify(errData)}`
-      );
-      console.warn(
-        `${new Date().toISOString()} [poller] backing off ${backoffMs}ms before next attempt`
+        `${new Date().toISOString()} [poller-cca] transient error (#${transientErrorCount}) for ${sessionId}: code=${errCode} status=${axiosStatus} msg=${errMsg}`
       );
 
       await new Promise((r) => setTimeout(r, backoffMs));
       continue;
     }
 
-    // normal poll interval
     await new Promise((r) => setTimeout(r, baseDelayMs));
   }
 
-  // overall timeout fallback
   emitSafe(socketId, "selenium:session_update", {
     session_id: sessionId,
     status: "error",
     message: "Polling timeout while waiting for selenium session",
   });
-  delete dentaquestJobs[sessionId];
+  delete ccaJobs[sessionId];
 }
 
-/**
- * POST /dentaquest-eligibility
- * Starts DentaQuest eligibility Selenium job.
- * Expects:
- *  - req.body.data: stringified JSON like your existing /eligibility-check
- *  - req.body.socketId: socket.io client id
- */
 router.post(
-  "/dentaquest-eligibility",
+  "/cca-eligibility",
   async (req: Request, res: Response): Promise<any> => {
     if (!req.body.data) {
       return res
@@ -682,7 +682,7 @@ router.post(
 
       const credentials = await storage.getInsuranceCredentialByUserAndSiteKey(
         req.user.id,
-        rawData.insuranceSiteKey
+        "CCA"
       );
       if (!credentials) {
         return res.status(404).json({
@@ -693,14 +693,14 @@ router.post(
 
       const enrichedData = {
         ...rawData,
-        dentaquestUsername: credentials.username,
-        dentaquestPassword: credentials.password,
+        cca_username: credentials.username,
+        cca_password: credentials.password,
       };
 
       const socketId: string | undefined = req.body.socketId;
 
       const agentResp =
-        await forwardToSeleniumDentaQuestEligibilityAgent(enrichedData);
+        await forwardToSeleniumCCAEligibilityAgent(enrichedData);
 
       if (
         !agentResp ||
@@ -715,73 +715,32 @@ router.post(
 
       const sessionId = agentResp.session_id as string;
 
-      // Save job context
-      dentaquestJobs[sessionId] = {
+      ccaJobs[sessionId] = {
         userId: req.user.id,
         insuranceEligibilityData: enrichedData,
         socketId,
       };
 
-      // start polling in background to notify client via socket and process job
       pollAgentSessionAndProcess(sessionId, socketId).catch((e) =>
-        console.warn("pollAgentSessionAndProcess failed", e)
+        console.warn("pollAgentSessionAndProcess (cca) failed", e)
       );
 
-      // reply immediately with started status
       return res.json({ status: "started", session_id: sessionId });
     } catch (err: any) {
       console.error(err);
       return res.status(500).json({
-        error: err.message || "Failed to start DentaQuest selenium agent",
+        error: err.message || "Failed to start CCA selenium agent",
       });
     }
   }
 );
 
-/**
- * POST /selenium/submit-otp
- * Body: { session_id, otp, socketId? }
- * Forwards OTP to Python agent and optionally notifies client socket.
- */
-router.post(
-  "/selenium/submit-otp",
-  async (req: Request, res: Response): Promise<any> => {
-    const { session_id: sessionId, otp, socketId } = req.body;
-    if (!sessionId || !otp) {
-      return res.status(400).json({ error: "session_id and otp are required" });
-    }
-
-    try {
-      const r = await forwardOtpToSeleniumDentaQuestAgent(sessionId, otp);
-
-      // emit OTP accepted (if socket present)
-      emitSafe(socketId, "selenium:otp_submitted", {
-        session_id: sessionId,
-        result: r,
-      });
-
-      return res.json(r);
-    } catch (err: any) {
-      console.error(
-        "Failed to forward OTP:",
-        err?.response?.data || err?.message || err
-      );
-      return res.status(500).json({
-        error: "Failed to forward otp to selenium agent",
-        detail: err?.message || err,
-      });
-    }
-  }
-);
-
-// GET /selenium/session/:sid/final
 router.get(
   "/selenium/session/:sid/final",
   async (req: Request, res: Response) => {
     const sid = req.params.sid;
     if (!sid) return res.status(400).json({ error: "session id required" });
 
-    // Only the current in-memory result is available
     if (currentFinalSessionId !== sid || !currentFinalResult) {
       return res.status(404).json({ error: "final result not found" });
     }
@@ -791,4 +750,3 @@ router.get(
 );
 
 export default router;
-

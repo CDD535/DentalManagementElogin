@@ -10,19 +10,18 @@ import { CredentialTable } from "@/components/settings/insuranceCredTable";
 import { useAuth } from "@/hooks/use-auth";
 import { Staff } from "@repo/db/types";
 
+type SafeUser = { id: number; username: string; role: "ADMIN" | "USER" };
 
 export default function SettingsPage() {
   const { toast } = useToast();
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
-  // Modal and editing staff state
   const [modalOpen, setModalOpen] = useState(false);
   const [credentialModalOpen, setCredentialModalOpen] = useState(false);
   const [editingStaff, setEditingStaff] = useState<Staff | null>(null);
 
   const toggleMobileMenu = () => setIsMobileMenuOpen((prev) => !prev);
 
-  // Fetch staff data
   const {
     data: staff = [],
     isLoading,
@@ -37,14 +36,13 @@ export default function SettingsPage() {
       }
       return res.json();
     },
-    staleTime: 1000 * 60 * 5, // 5 minutes cache
+    staleTime: 1000 * 60 * 5,
   });
 
-  // Add Staff mutation
   const addStaffMutate = useMutation<
-    Staff, // Return type
-    Error, // Error type
-    Omit<Staff, "id" | "createdAt"> // Variables
+    Staff,
+    Error,
+    Omit<Staff, "id" | "createdAt">
   >({
     mutationFn: async (newStaff: Omit<Staff, "id" | "createdAt">) => {
       const res = await apiRequest("POST", "/api/staffs/", newStaff);
@@ -71,7 +69,6 @@ export default function SettingsPage() {
     },
   });
 
-  // Update Staff mutation
   const updateStaffMutate = useMutation<
     Staff,
     Error,
@@ -108,7 +105,6 @@ export default function SettingsPage() {
     },
   });
 
-  // Delete Staff mutation
   const deleteStaffMutation = useMutation<number, Error, number>({
     mutationFn: async (id: number) => {
       const res = await apiRequest("DELETE", `/api/staffs/${id}`);
@@ -136,30 +132,24 @@ export default function SettingsPage() {
     },
   });
 
-  // Extract mutation states for modal control and loading
-
   const isAdding = addStaffMutate.status === "pending";
   const isAddSuccess = addStaffMutate.status === "success";
 
   const isUpdating = updateStaffMutate.status === "pending";
   const isUpdateSuccess = updateStaffMutate.status === "success";
 
-  // Open Add modal
   const openAddStaffModal = () => {
     setEditingStaff(null);
     setModalOpen(true);
   };
 
-  // Open Edit modal
   const openEditStaffModal = (staff: Staff) => {
     setEditingStaff(staff);
     setModalOpen(true);
   };
 
-  // Handle form submit for Add or Edit
   const handleFormSubmit = (formData: Omit<Staff, "id" | "createdAt">) => {
     if (editingStaff) {
-      // Editing existing staff
       if (editingStaff.id === undefined) {
         toast({
           title: "Error",
@@ -181,7 +171,6 @@ export default function SettingsPage() {
     setModalOpen(false);
   };
 
-  // Close modal on successful add/update
   useEffect(() => {
     if (isAddSuccess || isUpdateSuccess) {
       setModalOpen(false);
@@ -215,10 +204,86 @@ export default function SettingsPage() {
       `Viewing staff member:\n${staff.name} (${staff.email || "No email"})`
     );
 
-  // MANAGE USER
+  // --- Users control (list, add, edit password, delete) ---
+  const {
+    data: usersList = [],
+    isLoading: usersLoading,
+    isError: usersError,
+    error: usersErrorObj,
+  } = useQuery<SafeUser[]>({
+    queryKey: ["/api/users/list"],
+    queryFn: async () => {
+      const res = await apiRequest("GET", "/api/users/list");
+      if (!res.ok) throw new Error("Failed to fetch users");
+      return res.json();
+    },
+    staleTime: 1000 * 60 * 2,
+  });
+
+  const addUserMutate = useMutation<SafeUser, Error, { username: string; password: string; role?: "ADMIN" | "USER" }>({
+    mutationFn: async (data) => {
+      const res = await apiRequest("POST", "/api/users/", data);
+      if (!res.ok) {
+        const err = await res.json().catch(() => null);
+        throw new Error(err?.error || "Failed to add user");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/users/list"] });
+      setAddUserModalOpen(false);
+      toast({ title: "User Added", description: "User created successfully.", variant: "default" });
+    },
+    onError: (e: any) => {
+      toast({ title: "Error", description: e?.message || "Failed to add user", variant: "destructive" });
+    },
+  });
+
+  const updateUserPasswordMutate = useMutation<SafeUser, Error, { id: number; password: string }>({
+    mutationFn: async ({ id, password }) => {
+      const res = await apiRequest("PUT", `/api/users/${id}`, { password });
+      if (!res.ok) {
+        const err = await res.json().catch(() => null);
+        throw new Error(err?.error || "Failed to update password");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/users/list"] });
+      setEditPasswordUser(null);
+      toast({ title: "Password Updated", description: "Password changed successfully.", variant: "default" });
+    },
+    onError: (e: any) => {
+      toast({ title: "Error", description: e?.message || "Failed to update password", variant: "destructive" });
+    },
+  });
+
+  const deleteUserMutate = useMutation<number, Error, number>({
+    mutationFn: async (id) => {
+      const res = await apiRequest("DELETE", `/api/users/${id}`);
+      if (!res.ok) {
+        const err = await res.json().catch(() => null);
+        throw new Error(err?.error || "Failed to delete user");
+      }
+      return id;
+    },
+    onSuccess: () => {
+      setUserToDelete(null);
+      queryClient.invalidateQueries({ queryKey: ["/api/users/list"] });
+      toast({ title: "User Removed", description: "User deleted.", variant: "default" });
+    },
+    onError: (e: any) => {
+      toast({ title: "Error", description: e?.message || "Failed to delete user", variant: "destructive" });
+    },
+  });
+
+  const [addUserModalOpen, setAddUserModalOpen] = useState(false);
+  const [editPasswordUser, setEditPasswordUser] = useState<SafeUser | null>(null);
+  const [userToDelete, setUserToDelete] = useState<SafeUser | null>(null);
+
+  // MANAGE USER (current user profile)
   const [usernameUser, setUsernameUser] = useState("");
 
-  //fetch user
   const { user } = useAuth();
   useEffect(() => {
     if (user?.username) {
@@ -226,7 +291,6 @@ export default function SettingsPage() {
     }
   }, [user]);
 
-  //update user mutation
   const updateUserMutate = useMutation({
     mutationFn: async (
       updates: Partial<{ username: string; password: string }>
@@ -303,10 +367,73 @@ export default function SettingsPage() {
             </div>
           )}
 
-          {/* User Setting section */}
+          {/* Users control section */}
+          <Card className="mt-6">
+            <CardContent className="py-6">
+              <div className="flex justify-between items-center mb-4">
+                <h3 className="text-lg font-semibold">User Accounts</h3>
+                <button
+                  type="button"
+                  onClick={() => setAddUserModalOpen(true)}
+                  className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
+                >
+                  Add User
+                </button>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="min-w-full divide-y divide-gray-200">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Username</th>
+                      <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Role</th>
+                      <th className="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="bg-white divide-y divide-gray-200">
+                    {usersLoading && (
+                      <tr><td colSpan={3} className="px-4 py-4 text-gray-500">Loading users...</td></tr>
+                    )}
+                    {usersError && (
+                      <tr><td colSpan={3} className="px-4 py-4 text-red-600">{(usersErrorObj as Error)?.message}</td></tr>
+                    )}
+                    {!usersLoading && !usersError && usersList.filter((u) => u.id !== user?.id).length === 0 && (
+                      <tr><td colSpan={3} className="px-4 py-4 text-gray-500">No other users.</td></tr>
+                    )}
+                    {!usersLoading && usersList.filter((u) => u.id !== user?.id).map((u) => (
+                      <tr key={u.id}>
+                        <td className="px-4 py-2">
+                          <span>{u.username}</span>
+                        </td>
+                        <td className="px-4 py-2">{u.role}</td>
+                        <td className="px-4 py-2 text-right space-x-2">
+                          <button
+                            type="button"
+                            onClick={() => setEditPasswordUser(u)}
+                            className="text-blue-600 hover:underline"
+                          >
+                            Edit password
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setUserToDelete(u)}
+                            className="text-red-600 hover:underline"
+                            title="Delete user"
+                          >
+                            Delete
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* User Setting section (current user profile) */}
           <Card className="mt-6">
             <CardContent className="space-y-4 py-6">
-              <h3 className="text-lg font-semibold">User Settings</h3>
+              <h3 className="text-lg font-semibold">Admin Setting</h3>
               <form
                 className="space-y-4"
                 onSubmit={(e) => {
@@ -357,6 +484,96 @@ export default function SettingsPage() {
               </form>
             </CardContent>
           </Card>
+
+          {/* Add User modal */}
+          {addUserModalOpen && (
+            <div className="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center z-50">
+              <div className="bg-white rounded-lg p-6 w-full max-w-md shadow-lg">
+                <h2 className="text-lg font-bold mb-4">Add User</h2>
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    const form = e.currentTarget;
+                    const username = (form.querySelector('[name="new-username"]') as HTMLInputElement)?.value?.trim();
+                    const password = (form.querySelector('[name="new-password"]') as HTMLInputElement)?.value;
+                    const role = (form.querySelector('[name="new-role"]') as HTMLSelectElement)?.value as "ADMIN" | "USER";
+                    if (!username || !password) {
+                      toast({ title: "Error", description: "Username and password are required.", variant: "destructive" });
+                      return;
+                    }
+                    addUserMutate.mutate({ username, password, role: role || "USER" });
+                  }}
+                  className="space-y-4"
+                >
+                  <div>
+                    <label className="block text-sm font-medium">Username</label>
+                    <input name="new-username" type="text" required className="mt-1 p-2 border rounded w-full" />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium">Password</label>
+                    <input name="new-password" type="password" required className="mt-1 p-2 border rounded w-full" placeholder="••••••••" />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium">Role</label>
+                    <select name="new-role" className="mt-1 p-2 border rounded w-full" defaultValue="USER">
+                      <option value="USER">User</option>
+                      <option value="ADMIN">Admin</option>
+                    </select>
+                  </div>
+                  <div className="flex gap-2 justify-end">
+                    <button type="button" onClick={() => setAddUserModalOpen(false)} className="px-4 py-2 border rounded hover:bg-gray-100">
+                      Cancel
+                    </button>
+                    <button type="submit" disabled={addUserMutate.isPending} className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50">
+                      {addUserMutate.isPending ? "Adding..." : "Add User"}
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          )}
+
+          {/* Edit password modal */}
+          {editPasswordUser && (
+            <div className="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center z-50">
+              <div className="bg-white rounded-lg p-6 w-full max-w-md shadow-lg">
+                <h2 className="text-lg font-bold mb-4">Change password for {editPasswordUser.username}</h2>
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    const form = e.currentTarget;
+                    const password = (form.querySelector('[name="edit-password"]') as HTMLInputElement)?.value;
+                    if (!password?.trim()) {
+                      toast({ title: "Error", description: "Password is required.", variant: "destructive" });
+                      return;
+                    }
+                    updateUserPasswordMutate.mutate({ id: editPasswordUser.id, password });
+                  }}
+                  className="space-y-4"
+                >
+                  <div>
+                    <label className="block text-sm font-medium">New password</label>
+                    <input name="edit-password" type="password" required className="mt-1 p-2 border rounded w-full" placeholder="••••••••" />
+                  </div>
+                  <div className="flex gap-2 justify-end">
+                    <button type="button" onClick={() => setEditPasswordUser(null)} className="px-4 py-2 border rounded hover:bg-gray-100">
+                      Cancel
+                    </button>
+                    <button type="submit" disabled={updateUserPasswordMutate.isPending} className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50">
+                      {updateUserPasswordMutate.isPending ? "Saving..." : "Save"}
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          )}
+
+          <DeleteConfirmationDialog
+            isOpen={!!userToDelete}
+            onConfirm={() => userToDelete && deleteUserMutate.mutate(userToDelete.id)}
+            onCancel={() => setUserToDelete(null)}
+            entityName={userToDelete?.username}
+          />
 
           {/* Credential Section */}
           <div className="mt-6">

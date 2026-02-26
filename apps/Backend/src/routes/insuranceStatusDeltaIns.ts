@@ -246,7 +246,7 @@ async function handleDeltaInsCompletedJob(
       };
     }
 
-    const updatePayload: Record<string, any> = { status: eligibilityStatus };
+    const updatePayload: Record<string, any> = { status: eligibilityStatus, insuranceProvider: "Delta Dental Ins" };
     if (firstName && (!patient.firstName || patient.firstName.trim() === "")) {
       updatePayload.firstName = firstName;
     }
@@ -255,7 +255,7 @@ async function handleDeltaInsCompletedJob(
     }
 
     await storage.updatePatient(patient.id, updatePayload);
-    outputResult.patientUpdateStatus = `Patient ${patient.id} updated: status=${eligibilityStatus}, name=${firstName} ${lastName}`;
+    outputResult.patientUpdateStatus = `Patient ${patient.id} updated: status=${eligibilityStatus}, insuranceProvider=Delta Dental Ins, name=${firstName} ${lastName}`;
     console.log(`[deltains-eligibility] ${outputResult.patientUpdateStatus}`);
 
     // Handle PDF

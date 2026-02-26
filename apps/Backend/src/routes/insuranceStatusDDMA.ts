@@ -109,6 +109,7 @@ async function createOrUpdatePatientByInsuranceId(options: {
       phone: "",
       userId,
       insuranceId,
+      insuranceProvider: "Delta MA",
     };
     let patientData: InsertPatient;
     try {
@@ -273,8 +274,8 @@ async function handleDdmaCompletedJob(
     }
 
     // Update patient status from Delta MA eligibility result
-    await storage.updatePatient(patient.id, { status: eligibilityStatus });
-    outputResult.patientUpdateStatus = `Patient ${patient.id} status set to ${eligibilityStatus} (Delta MA eligibility: ${seleniumResult.eligibility})`;
+    await storage.updatePatient(patient.id, { status: eligibilityStatus, insuranceProvider: "Delta MA" });
+    outputResult.patientUpdateStatus = `Patient ${patient.id} status set to ${eligibilityStatus}, insuranceProvider=Delta MA (Delta MA eligibility: ${seleniumResult.eligibility})`;
     console.log(`[ddma-eligibility] ${outputResult.patientUpdateStatus}`);
 
     // Handle PDF or convert screenshot -> pdf if available

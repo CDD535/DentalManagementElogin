@@ -69,15 +69,15 @@ async function createOrUpdatePatientByInsuranceId(options: {
     }
     return;
   } else {
-    // inside createOrUpdatePatientByInsuranceId, when creating:
     const createPayload: any = {
       firstName: incomingFirst,
       lastName: incomingLast,
-      dateOfBirth: dob, // raw from caller (string | Date | null)
+      dateOfBirth: dob,
       gender: "",
       phone: "",
       userId,
       insuranceId,
+      insuranceProvider: "MassHealth",
     };
 
     let patientData: InsertPatient;
@@ -219,8 +219,8 @@ router.post(
       if (patient && patient.id !== undefined) {
         const newStatus =
           seleniumResult.eligibility === "Y" ? "ACTIVE" : "INACTIVE";
-        await storage.updatePatient(patient.id, { status: newStatus });
-        outputResult.patientUpdateStatus = `Patient status updated to ${newStatus}`;
+        await storage.updatePatient(patient.id, { status: newStatus, insuranceProvider: "MassHealth" });
+        outputResult.patientUpdateStatus = `Patient status updated to ${newStatus}, insuranceProvider=MassHealth`;
 
         // ✅ Step 5: Handle PDF Upload
         if (
@@ -649,8 +649,8 @@ router.post(
             seleniumResult?.eligibility === "Y" ? "ACTIVE" : "INACTIVE";
 
           // 1. updating patient
-          await storage.updatePatient(updatedPatient.id, { status: newStatus });
-          resultItem.patientUpdateStatus = `Patient status updated to ${newStatus}`;
+          await storage.updatePatient(updatedPatient.id, { status: newStatus, insuranceProvider: "MassHealth" });
+          resultItem.patientUpdateStatus = `Patient status updated to ${newStatus}, insuranceProvider=MassHealth`;
 
           // 2. updating appointment status - for aptmnt page
           try {

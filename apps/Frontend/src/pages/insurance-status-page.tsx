@@ -31,6 +31,7 @@ import { DdmaEligibilityButton } from "@/components/insurance-status/ddma-buton-
 import { DentaQuestEligibilityButton } from "@/components/insurance-status/dentaquest-button-modal";
 import { UnitedSCOEligibilityButton } from "@/components/insurance-status/unitedsco-button-modal";
 import { DeltaInsEligibilityButton } from "@/components/insurance-status/deltains-button-modal";
+import { CCAEligibilityButton } from "@/components/insurance-status/cca-button-modal";
 
 export default function InsuranceStatusPage() {
   const { user } = useAuth();
@@ -655,14 +656,20 @@ export default function InsuranceStatusPage() {
                   }}
                 />
 
-                <Button
-                  className="w-full"
-                  variant="outline"
-                  disabled={isFormIncomplete}
-                >
-                  <CheckCircle className="h-4 w-4 mr-2" />
-                  CCA
-                </Button>
+                <CCAEligibilityButton
+                  memberId={memberId}
+                  dateOfBirth={dateOfBirth}
+                  firstName={firstName}
+                  lastName={lastName}
+                  isFormIncomplete={isFormIncomplete}
+                  onPdfReady={(pdfId, fallbackFilename) => {
+                    setPreviewPdfId(pdfId);
+                    setPreviewFallbackFilename(
+                      fallbackFilename ?? `eligibility_cca_${memberId}.pdf`
+                    );
+                    setPreviewOpen(true);
+                  }}
+                />
               </div>
 
               {/* Row 3 */}

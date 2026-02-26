@@ -12,12 +12,14 @@ import helpers_ddma_eligibility as hddma
 import helpers_dentaquest_eligibility as hdentaquest
 import helpers_unitedsco_eligibility as hunitedsco
 import helpers_deltains_eligibility as hdeltains
+import helpers_cca_eligibility as hcca
 
 # Import session clear functions for startup
 from ddma_browser_manager import clear_ddma_session_on_startup
 from dentaquest_browser_manager import clear_dentaquest_session_on_startup
 from unitedsco_browser_manager import clear_unitedsco_session_on_startup
 from deltains_browser_manager import clear_deltains_session_on_startup
+from cca_browser_manager import clear_cca_session_on_startup
 
 from dotenv import load_dotenv
 load_dotenv() 
@@ -31,6 +33,7 @@ clear_ddma_session_on_startup()
 clear_dentaquest_session_on_startup()
 clear_unitedsco_session_on_startup()
 clear_deltains_session_on_startup()
+clear_cca_session_on_startup()
 print("=" * 50)
 print("SESSION CLEAR COMPLETE - FRESH LOGINS REQUIRED")
 print("=" * 50)
@@ -425,6 +428,48 @@ async def deltains_session_status(sid: str):
     return s
 
 
+# Endpoint:9 - CCA eligibility (background, no OTP)
+
+async def _cca_worker_wrapper(sid: str, data: dict, url: str):
+    global active_jobs, waiting_jobs
+    async with semaphore:
+        async with lock:
+            waiting_jobs -= 1
+            active_jobs += 1
+        try:
+            await hcca.start_cca_run(sid, data, url)
+        finally:
+            async with lock:
+                active_jobs -= 1
+
+
+@app.post("/cca-eligibility")
+async def cca_eligibility(request: Request):
+    global waiting_jobs
+
+    body = await request.json()
+    data = body.get("data", {})
+
+    sid = hcca.make_session_entry()
+    hcca.sessions[sid]["type"] = "cca_eligibility"
+    hcca.sessions[sid]["last_activity"] = time.time()
+
+    async with lock:
+        waiting_jobs += 1
+
+    asyncio.create_task(_cca_worker_wrapper(sid, data, url="https://pwp.sciondental.com/PWP/Landing"))
+
+    return {"status": "started", "session_id": sid}
+
+
+@app.get("/cca-session/{sid}/status")
+async def cca_session_status(sid: str):
+    s = hcca.get_session_status(sid)
+    if s.get("status") == "not_found":
+        raise HTTPException(status_code=404, detail="session not found")
+    return s
+
+
 @app.post("/submit-otp")
 async def submit_otp(request: Request):
     """
@@ -507,6 +552,15 @@ async def clear_deltains_session():
     try:
         clear_deltains_session_on_startup()
         return {"status": "success", "message": "DeltaIns session cleared"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+@app.post("/clear-cca-session")
+async def clear_cca_session_endpoint():
+    try:
+        clear_cca_session_on_startup()
+        return {"status": "success", "message": "CCA session cleared"}
     except Exception as e:
         return {"status": "error", "message": str(e)}
 

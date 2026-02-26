@@ -260,9 +260,8 @@ async function handleUnitedSCOCompletedJob(
     }
 
     // Update patient status and name from United SCO eligibility result
-    const updatePayload: Record<string, any> = { status: eligibilityStatus };
+    const updatePayload: Record<string, any> = { status: eligibilityStatus, insuranceProvider: "United SCO" };
     
-    // Also update first/last name if we extracted them and patient has empty names
     if (firstName && (!patient.firstName || patient.firstName.trim() === "")) {
       updatePayload.firstName = firstName;
     }
@@ -271,7 +270,7 @@ async function handleUnitedSCOCompletedJob(
     }
     
     await storage.updatePatient(patient.id, updatePayload);
-    outputResult.patientUpdateStatus = `Patient ${patient.id} updated: status=${eligibilityStatus}, name=${firstName} ${lastName} (United SCO eligibility: ${seleniumResult.eligibility})`;
+    outputResult.patientUpdateStatus = `Patient ${patient.id} updated: status=${eligibilityStatus}, insuranceProvider=United SCO, name=${firstName} ${lastName} (United SCO eligibility: ${seleniumResult.eligibility})`;
     console.log(`[unitedsco-eligibility] ${outputResult.patientUpdateStatus}`);
 
     // Handle PDF or convert screenshot -> pdf if available

@@ -20,6 +20,7 @@ const SITE_KEY_LABELS: Record<string, string> = {
   DELTAINS: "Delta Dental Ins",
   DENTAQUEST: "Tufts SCO / DentaQuest",
   UNITEDSCO: "United SCO",
+  CCA: "CCA",
 };
 
 function getSiteKeyLabel(siteKey: string): string {
