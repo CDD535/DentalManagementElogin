@@ -22,7 +22,9 @@
     "prisma-zod-generator": "^2.1.2"
   },
   "devDependencies": {
+    "@types/bcrypt": "^5.0.2",
     "@types/node": "^22.15.17",
+    "bcrypt": "^5.1.1",
     "prisma": "^7.0.0",
     "tsx": "^4.19.4",
     "typescript": "^5.8.2"
